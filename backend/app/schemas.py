@@ -21,6 +21,19 @@ class ActionResult(BaseModel):
     entry: dict[str, Any] | None = None
 
 
+class PostponeResult(BaseModel):
+    """批量顺延结果：成功顺延的任务与冲突任务分别返回，便于单独列出。"""
+
+    ok: bool
+    message: str
+    window_start: str
+    window_end: str
+    delta_minutes: int
+    selected: int
+    postponed: list[dict[str, Any]] = Field(default_factory=list)
+    conflicts: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class EntryPayload(BaseModel):
     """登记或修改一条业务记录时提交的字段集合。"""
 
@@ -160,6 +173,8 @@ class TowingEntry(BaseModel):
     field_5: str | None = None  # 牵引人员
     field_6: str | None = None  # 完成时刻
     field_7: str | None = None  # 牵引状态
+    field_8: str | None = None  # 生效开始
+    field_9: str | None = None  # 生效结束
 
 class LoadsheetEntry(BaseModel):
     """配载单明细结构。"""

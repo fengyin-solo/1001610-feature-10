@@ -1,18 +1,18 @@
-"""航空器牵引接口：维护牵引任务，覆盖安排牵引、确认完成、取消任务等动作。"""
+"""航空器牵引接口：维护牵引任务，覆盖安排牵引、确认完成、取消任务与批量顺延。"""
 from __future__ import annotations
 
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 
-from app.schemas import ActionResult, EntryPayload, PageResult
+from app.schemas import ActionResult, EntryPayload, PageResult, PostponeResult
 from app.services.towing import TowingService
 
 router = APIRouter(prefix="/api/towing", tags=["航空器牵引"])
 
 service = TowingService()
 
-LIST_FIELDS = ["牵引编号", "关联航班", "牵引车号", "起点机位", "终点机位", "牵引人员", "完成时刻", "牵引状态"]
+LIST_FIELDS = ["牵引编号", "关联航班", "牵引车号", "起点机位", "终点机位", "牵引人员", "生效开始", "生效结束", "完成时刻", "牵引状态"]
 STATUSES = ["待牵引", "牵引中", "已完成", "已取消"]
 
 
@@ -30,6 +30,19 @@ def list_entries(
     return PageResult(items=items, total=total, page=page, size=size)
 
 
+@router.get("/statistics", response_model=dict)
+def statistics() -> dict[str, Any]:
+    """牵引统计口径：与任务列表同源，顺延后的时段与机位口径同步刷新。"""
+    return service.statistics()
+
+
+@router.get("/export")
+def export_entries() -> dict[str, Any]:
+    """导出航空器牵引清单：返回当前过滤条件下的全量数据。"""
+    items, total = service.list_entries(page=1, size=10000)
+    return {"module": "towing", "total": total, "items": items}
+
+
 @router.get("/{entry_id}", response_model=dict)
 def get_entry(entry_id: int) -> dict:
     """读取单条牵引任务明细；不存在时给出可读的错误说明。"""
@@ -41,11 +54,25 @@ def get_entry(entry_id: int) -> dict:
 
 @router.post("", response_model=ActionResult)
 def create_entry(payload: EntryPayload) -> ActionResult:
-    """登记一条牵引任务，缺字段时说明原因而不是静默丢弃。"""
-    entry, missing = service.create_entry(payload.values)
-    if missing:
-        return ActionResult(ok=False, message=f"缺少必填字段：{'、'.join(missing)}")
+    """登记一条牵引任务，缺字段或违反时段/机位把关时说明原因而不是静默丢弃。"""
+    entry, problems = service.create_entry(payload.values)
+    if problems:
+        return ActionResult(ok=False, message="；".join(problems))
     return ActionResult(ok=True, message="牵引任务已登记", entry=entry)
+
+
+@router.post("/postpone", response_model=PostponeResult)
+def postpone_entries(payload: EntryPayload) -> PostponeResult:
+    """按生效时段批量顺延一批牵引任务，冲突的几条单独列出，其余照常顺延。"""
+    values = payload.values
+    result, message = service.postpone_entries(
+        start_raw=values.get("start"),
+        end_raw=values.get("end"),
+        delta_minutes=values.get("delta_minutes"),
+    )
+    if result is None:
+        raise HTTPException(status_code=400, detail=message)
+    return PostponeResult(**result)
 
 
 @router.post("/{entry_id}/actions", response_model=ActionResult)
@@ -56,10 +83,3 @@ def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
     if entry is None:
         return ActionResult(ok=False, message=message)
     return ActionResult(ok=True, message=message, entry=entry)
-
-
-@router.get("/export")
-def export_entries() -> dict[str, Any]:
-    """导出航空器牵引清单：返回当前过滤条件下的全量数据。"""
-    items, total = service.list_entries(page=1, size=10000)
-    return {"module": "towing", "total": total, "items": items}
